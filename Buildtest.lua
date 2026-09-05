@@ -1,5 +1,9 @@
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait()
+    LocalPlayer = Players.LocalPlayer
+end
 local _, CoreGui = pcall(function() return game:GetService("CoreGui") end)
 local Mouse = LocalPlayer:GetMouse()
 
@@ -1916,27 +1920,40 @@ local function getAntiGrief2Tool()
     t.Parent = LocalPlayer.Backpack
 end
 
-LocalPlayer.Chatted:Connect(function(msg)
-if msg:lower() == "/antigriefd" then
-spawnFn(getAntiGriefBuildTool)
-elseif msg:lower() == "/antigrief2" then
-spawnFn(getAntiGrief2Tool)
-elseif msg:lower() == "/rebuilt" then
-spawnFn(getRebuiltTool)
-elseif msg:lower() == "/worldedit" then
-spawnFn(getWorldEditTool)
-elseif msg:lower() == "/wallbuilder" then
-spawnFn(getWallBuilderTool)
-elseif msg:lower() == "/destroyer" then
-spawnFn(getDestroyerTool)
-elseif msg:lower() == "/infbtools" then
-toggleInfBtools(true)
-elseif msg:lower() == "/unfbtools" then
-toggleInfBtools(false)
-elseif msg:lower() == "/cmds" then
-sendAlert("Build Tools Loaded! Commands: /antigriefd, /antigrief2, /rebuilt, /worldedit, /wallbuilder, /destroyer, /infbtools, /unfbtools, /cmds", "#00FF00", Color3.fromRGB(0, 255, 0))
-sendAlert("created by:sofiakira", "#FF69B4", Color3.fromRGB(255, 105, 180))
+local function handleCommand(msg)
+    if msg:lower() == "/antigriefd" then
+        spawnFn(getAntiGriefBuildTool)
+    elseif msg:lower() == "/antigrief2" then
+        spawnFn(getAntiGrief2Tool)
+    elseif msg:lower() == "/rebuilt" then
+        spawnFn(getRebuiltTool)
+    elseif msg:lower() == "/worldedit" then
+        spawnFn(getWorldEditTool)
+    elseif msg:lower() == "/wallbuilder" then
+        spawnFn(getWallBuilderTool)
+    elseif msg:lower() == "/destroyer" then
+        spawnFn(getDestroyerTool)
+    elseif msg:lower() == "/infbtools" then
+        toggleInfBtools(true)
+    elseif msg:lower() == "/unfbtools" then
+        toggleInfBtools(false)
+    elseif msg:lower() == "/cmds" then
+        sendAlert("Build Tools Loaded! Commands: /antigriefd, /antigrief2, /rebuilt, /worldedit, /wallbuilder, /destroyer, /infbtools, /unfbtools, /cmds", "#00FF00", Color3.fromRGB(0, 255, 0))
+        sendAlert("created by:sofiakira", "#FF69B4", Color3.fromRGB(255, 105, 180))
+    end
 end
+
+LocalPlayer.Chatted:Connect(handleCommand)
+
+pcall(function()
+    local tcs = game:GetService("TextChatService")
+    if tcs and tostring(tcs.ChatVersion) == "Enum.ChatVersion.TextChatService" then
+        tcs.MessageReceived:Connect(function(textChatMessage)
+            if textChatMessage.TextSource and textChatMessage.TextSource.UserId == LocalPlayer.UserId then
+                handleCommand(textChatMessage.Text)
+            end
+        end)
+    end
 end)
 
 sendAlert("Build Tools Loaded! Commands: /antigriefd, /antigrief2, /rebuilt, /worldedit, /wallbuilder, /destroyer, /infbtools, /unfbtools, /cmds", "#00FF00", Color3.fromRGB(0, 255, 0))
