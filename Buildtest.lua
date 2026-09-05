@@ -129,22 +129,6 @@ end
 return workspace.Terrain, Enum.NormalId.Top, targetPos, sPos
 end
 
-local function getBlockOwner(part)
-if not part then return nil end
-local ownerTag = part:FindFirstChild("Owner") or part:FindFirstChild("creator") or part:FindFirstChild("Player")
-if ownerTag then
-if ownerTag:IsA("ObjectValue") and ownerTag.Value then
-return ownerTag.Value.Name
-elseif ownerTag:IsA("StringValue") then
-return ownerTag.Value
-end
-end
-if Players:FindFirstChild(part.Name) then
-return part.Name
-end
-return nil
-end
-
 local function getAntiGriefBuildTool()
 if LocalPlayer.Backpack:FindFirstChild("Anti-Grief Build") then LocalPlayer.Backpack["Anti-Grief Build"]:Destroy() end
 if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Anti-Grief Build") then LocalPlayer.Character["Anti-Grief Build"]:Destroy() end
@@ -221,7 +205,7 @@ local bricks = workspace:FindFirstChild("Bricks")
 if bricks then
 for _, p in ipairs(bricks:GetDescendants()) do
 if isValidBrick(p) then
-grid[getPosKey(p.Position)] = { part = p, pos = p.Position, color = p.Color, mat = p.Material, owner = getBlockOwner(p) }
+grid[getPosKey(p.Position)] = { part = p, pos = p.Position, color = p.Color, mat = p.Material, size = p.Size, shape = p:IsA("Part") and p.Shape or nil }
 end
 end
 end
@@ -241,7 +225,7 @@ lastRebuildAttempt = {}
 local initGrid = snapshotWorkspace()
 local count = 0
 for k, v in pairs(initGrid) do
-protectedGrid[k] = { pos = v.pos, color = v.color, mat = v.mat, owner = v.owner }
+protectedGrid[k] = { pos = v.pos, color = v.color, mat = v.mat, size = v.size, shape = v.shape }
 count = count + 1
 end
 
@@ -249,7 +233,7 @@ sendAlert("Build Anti-Grief active! Robust memory stored: " .. tostring(count) .
 
 spawnFn(function()
 while antiGriefActive do
-waitFn(1)
+waitFn(1) -- More efficient scanner (1 second instead of 0.2)
 local currentGrid = snapshotWorkspace()
 local char = LocalPlayer.Character
 local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -258,46 +242,44 @@ local hrp = char and char:FindFirstChild("HumanoidRootPart")
 if hum and hrp then
 local buildEvent = getEvent("Build")
 local paintEvent = getEvent("Paint")
+local shapeEvent = getEvent("Shape")
 
 local toBuild = {}
 local toPaint = {}
+local toShape = {}
 
 local now = tick()
 for k, saved in pairs(protectedGrid) do
 local cur = currentGrid[k]
-
-local isMyBlock = (saved.owner == LocalPlayer.Name)
-local hasNoOwner = (saved.owner == nil)
-local shouldProtect = isMyBlock or hasNoOwner
-
 if not cur then
-if shouldProtect then
 if not lastRebuildAttempt[k] or (now - lastRebuildAttempt[k] > 5) then
 table.insert(toBuild, {key = k, saved = saved})
 end
 else
-protectedGrid[k] = nil
-end
-elseif cur.color ~= saved.color or cur.mat ~= saved.mat then
-if shouldProtect then
+if cur.color ~= saved.color or cur.mat ~= saved.mat then
 if not lastRebuildAttempt[k] or (now - lastRebuildAttempt[k] > 5) then
 table.insert(toPaint, {key = k, part = cur.part, saved = saved})
 end
-else
-protectedGrid[k].color = cur.color
-protectedGrid[k].mat = cur.mat
+end
+local curShape = cur.part:IsA("Part") and cur.part.Shape or nil
+if cur.size ~= saved.size or curShape ~= saved.shape then
+if not lastRebuildAttempt[k] or (now - lastRebuildAttempt[k] > 2) then
+table.insert(toShape, {key = k, part = cur.part, saved = saved})
+end
 end
 end
 end
 
-if (#toBuild > 0 or #toPaint > 0) and (buildEvent or paintEvent) then
+if (#toBuild > 0 or #toPaint > 0 or #toShape > 0) and (buildEvent or paintEvent or shapeEvent) then
 local currentTool = char:FindFirstChildOfClass("Tool")
 local bTool = LocalPlayer.Backpack:FindFirstChild("Build") or char:FindFirstChild("Build")
 local pTool = LocalPlayer.Backpack:FindFirstChild("Paint") or char:FindFirstChild("Paint")
+local sTool = LocalPlayer.Backpack:FindFirstChild("Shape") or char:FindFirstChild("Shape")
 
-if bTool or pTool then
+if bTool or pTool or sTool then
 isSpoofing = true
 if #toBuild > 0 and bTool then hum:EquipTool(bTool)
+elseif #toShape > 0 and sTool then hum:EquipTool(sTool)
 elseif #toPaint > 0 and pTool then hum:EquipTool(pTool) end
 waitFn(0.05)
 hum:UnequipTools()
@@ -314,6 +296,30 @@ lastRebuildAttempt[data.key] = now
 pcall(function()
 local tBlock, tNorm, tHit, spoofFallback = getInfiniteBuildArgs(data.saved.pos, hrp)
 buildEvent:FireServer(tBlock, tNorm, tHit, "normal", spoofFallback)
+end)
+waitFn(0.06)
+end
+waitFn(0.5)
+end
+
+if #toShape > 0 and shapeEvent then
+for i, sd in ipairs(toShape) do
+if not antiGriefActive then break end
+lastRebuildAttempt[sd.key] = now
+pcall(function()
+local diff = sd.saved.size - sd.part.Size
+if math.abs(diff.X) > 0.05 then
+shapeEvent:FireServer(sd.part, Enum.NormalId.Right, hrp.Position, diff.X > 0 and "increase" or "decrease")
+elseif math.abs(diff.Y) > 0.05 then
+shapeEvent:FireServer(sd.part, Enum.NormalId.Top, hrp.Position, diff.Y > 0 and "increase" or "decrease")
+elseif math.abs(diff.Z) > 0.05 then
+shapeEvent:FireServer(sd.part, Enum.NormalId.Front, hrp.Position, diff.Z > 0 and "increase" or "decrease")
+else
+local curShape = sd.part:IsA("Part") and sd.part.Shape or nil
+if curShape ~= sd.saved.shape then
+shapeEvent:FireServer(sd.part, Enum.NormalId.Top, hrp.Position, "increase")
+end
+end
 end)
 waitFn(0.06)
 end
@@ -370,7 +376,8 @@ end
 
 for k, cur in pairs(currentGrid) do
 if not protectedGrid[k] then
-protectedGrid[k] = {pos = cur.pos, color = cur.color, mat = cur.mat, owner = cur.owner}
+protectedGrid[k] = {pos = cur.pos, color = cur.color, mat = cur.mat, size = cur.size, shape = cur.shape}
+end
 end
 end
 end
@@ -1259,9 +1266,663 @@ end)
 t.Parent = LocalPlayer.Backpack
 end
 
+local whitelistedPlayers = {}
+local ag2Active = false
+local ag2ProtectedGrid = {}
+local ag2LastRebuildAttempt = {}
+
+local function isMyBlock(p)
+    if p.Name == LocalPlayer.Name then return true end
+    for _, child in ipairs(p:GetChildren()) do
+        local cName = string.lower(child.Name)
+        if (child:IsA("StringValue") or child:IsA("ObjectValue")) and (cName == "creator" or cName == "owner" or cName == "player") then
+            if child:IsA("StringValue") and child.Value == LocalPlayer.Name then return true end
+            if child:IsA("ObjectValue") and child.Value == LocalPlayer then return true end
+        end
+    end
+    return false
+end
+
+local rebuiltActive = false
+local rebuiltGrid = {}
+local rebuiltLastRebuildAttempt = {}
+
+local function snapshotMyWorkspace()
+    local grid = {}
+    local bricks = workspace:FindFirstChild("Bricks")
+    if bricks then
+        for _, p in ipairs(bricks:GetDescendants()) do
+            if isValidBrick(p) and isMyBlock(p) then
+                grid[getPosKey(p.Position)] = { part = p, pos = p.Position, color = p.Color, mat = p.Material, size = p.Size, shape = p:IsA("Part") and p.Shape or nil }
+            end
+        end
+    end
+    return grid
+end
+
+local function getRebuiltTool()
+    if LocalPlayer.Backpack:FindFirstChild("Rebuilt") then LocalPlayer.Backpack["Rebuilt"]:Destroy() end
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Rebuilt") then LocalPlayer.Character["Rebuilt"]:Destroy() end
+
+    local t = Instance.new("Tool")
+    t.Name = "Rebuilt"
+    t.RequiresHandle = true
+    t.CanBeDropped = false
+
+    local h = Instance.new("Part")
+    h.Name = "Handle"
+    h.Size = Vector3.new(1.2, 1.8, 0.2)
+    h.Color = Color3.fromRGB(150, 30, 150)
+    h.Material = Enum.Material.SmoothPlastic
+    h.CanCollide = false
+    h.Parent = t
+
+    local screen = Instance.new("Part")
+    screen.Name = "Screen"
+    screen.Size = Vector3.new(1.1, 1.7, 0.22)
+    screen.Color = Color3.fromRGB(50, 10, 50)
+    screen.Material = Enum.Material.Neon
+    screen.CanCollide = false
+    screen.Massless = true
+    screen.Parent = t
+
+    local lw = Instance.new("WeldConstraint")
+    lw.Part0 = h
+    lw.Part1 = screen
+    lw.Parent = h
+    screen.CFrame = h.CFrame
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "RebuiltGui"
+    gui.ResetOnSpawn = false
+
+    local mf = Instance.new("Frame", gui)
+    mf.Size = UDim2.new(0, 200, 0, 100)
+    mf.Position = UDim2.new(0.5, -100, 1, -150)
+    mf.BackgroundColor3 = Color3.fromRGB(60, 40, 60)
+    local mfc = Instance.new("UICorner", mf); mfc.CornerRadius = UDim.new(0, 10)
+    mf.Visible = false
+
+    local title = Instance.new("TextLabel", mf)
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.BackgroundTransparency = 1
+    title.Text = "Rebuilt (My Blocks Only)"
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 13
+    title.TextColor3 = Color3.new(1, 1, 1)
+
+    local toggleBtn = Instance.new("TextButton", mf)
+    toggleBtn.Size = UDim2.new(0, 160, 0, 40)
+    toggleBtn.Position = UDim2.new(0.5, -80, 0.5, -5)
+    toggleBtn.BackgroundColor3 = rebuiltActive and Color3.fromRGB(100, 200, 100) or Color3.fromRGB(200, 100, 100)
+    local tbc = Instance.new("UICorner", toggleBtn); tbc.CornerRadius = UDim.new(0, 8)
+    toggleBtn.Text = rebuiltActive and "ACTIVE" or "INACTIVE"
+    toggleBtn.Font = Enum.Font.GothamBold
+    toggleBtn.TextSize = 16
+    toggleBtn.TextColor3 = Color3.new(1, 1, 1)
+
+    local isSpoofing = false
+
+    toggleBtn.MouseButton1Click:Connect(function()
+        rebuiltActive = not rebuiltActive
+        if rebuiltActive then
+            toggleBtn.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+            toggleBtn.Text = "ACTIVE"
+            rebuiltGrid = {}
+            rebuiltLastRebuildAttempt = {}
+
+            local initGrid = snapshotMyWorkspace()
+            local count = 0
+            for k, v in pairs(initGrid) do
+                rebuiltGrid[k] = { pos = v.pos, color = v.color, mat = v.mat, size = v.size, shape = v.shape }
+                count = count + 1
+            end
+
+            sendAlert("Rebuilt active! Tracking your blocks. Stored: " .. tostring(count) .. " blocks.", "#DDA0DD", Color3.fromRGB(221, 160, 221))
+
+            spawnFn(function()
+                while rebuiltActive do
+                    waitFn(1)
+                    local currentGrid = snapshotMyWorkspace()
+                    local char = LocalPlayer.Character
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+                    if hum and hrp then
+                        local buildEvent = getEvent("Build")
+                        local paintEvent = getEvent("Paint")
+                        local shapeEvent = getEvent("Shape")
+
+                        local toBuild = {}
+                        local toPaint = {}
+                        local toShape = {}
+
+                        local now = tick()
+                        for k, saved in pairs(rebuiltGrid) do
+                            local cur = currentGrid[k]
+                            if not cur then
+                                if not rebuiltLastRebuildAttempt[k] or (now - rebuiltLastRebuildAttempt[k] > 5) then
+                                    table.insert(toBuild, {key = k, saved = saved})
+                                end
+                            else
+                                if cur.color ~= saved.color or cur.mat ~= saved.mat then
+                                    if not rebuiltLastRebuildAttempt[k] or (now - rebuiltLastRebuildAttempt[k] > 5) then
+                                        table.insert(toPaint, {key = k, part = cur.part, saved = saved})
+                                    end
+                                end
+                                local curShape = cur.part:IsA("Part") and cur.part.Shape or nil
+                                if cur.size ~= saved.size or curShape ~= saved.shape then
+                                    if not rebuiltLastRebuildAttempt[k] or (now - rebuiltLastRebuildAttempt[k] > 2) then
+                                        table.insert(toShape, {key = k, part = cur.part, saved = saved})
+                                    end
+                                end
+                            end
+                        end
+
+                        if (#toBuild > 0 or #toPaint > 0 or #toShape > 0) and (buildEvent or paintEvent or shapeEvent) then
+                            local currentTool = char:FindFirstChildOfClass("Tool")
+                            local bTool = LocalPlayer.Backpack:FindFirstChild("Build") or char:FindFirstChild("Build")
+                            local pTool = LocalPlayer.Backpack:FindFirstChild("Paint") or char:FindFirstChild("Paint")
+                            local sTool = LocalPlayer.Backpack:FindFirstChild("Shape") or char:FindFirstChild("Shape")
+
+                            if bTool or pTool or sTool then
+                                isSpoofing = true
+                                if #toBuild > 0 and bTool then hum:EquipTool(bTool)
+                                elseif #toShape > 0 and sTool then hum:EquipTool(sTool)
+                                elseif #toPaint > 0 and pTool then hum:EquipTool(pTool) end
+                                waitFn(0.05)
+                                hum:UnequipTools()
+                                waitFn(0.05)
+                                if currentTool then hum:EquipTool(currentTool) end
+                                isSpoofing = false
+                            end
+
+                            if #toBuild > 0 and buildEvent then
+                                sendAlert("Rebuilt detected " .. tostring(#toBuild) .. " of YOUR missing blocks. Restoring...", "#FFA500", Color3.fromRGB(255, 165, 0))
+                                for i, data in ipairs(toBuild) do
+                                    if not rebuiltActive then break end
+                                    rebuiltLastRebuildAttempt[data.key] = now
+                                    pcall(function()
+                                        local tBlock, tNorm, tHit, spoofFallback = getInfiniteBuildArgs(data.saved.pos, hrp)
+                                        buildEvent:FireServer(tBlock, tNorm, tHit, "normal", spoofFallback)
+                                    end)
+                                    waitFn(0.06)
+                                end
+                                waitFn(0.5)
+                            end
+
+                            if #toShape > 0 and shapeEvent then
+                                for i, sd in ipairs(toShape) do
+                                    if not rebuiltActive then break end
+                                    rebuiltLastRebuildAttempt[sd.key] = now
+                                    pcall(function()
+                                        local diff = sd.saved.size - sd.part.Size
+                                        if math.abs(diff.X) > 0.05 then
+                                            shapeEvent:FireServer(sd.part, Enum.NormalId.Right, hrp.Position, diff.X > 0 and "increase" or "decrease")
+                                        elseif math.abs(diff.Y) > 0.05 then
+                                            shapeEvent:FireServer(sd.part, Enum.NormalId.Top, hrp.Position, diff.Y > 0 and "increase" or "decrease")
+                                        elseif math.abs(diff.Z) > 0.05 then
+                                            shapeEvent:FireServer(sd.part, Enum.NormalId.Front, hrp.Position, diff.Z > 0 and "increase" or "decrease")
+                                        else
+                                            local curShape = sd.part:IsA("Part") and sd.part.Shape or nil
+                                            if curShape ~= sd.saved.shape then
+                                                shapeEvent:FireServer(sd.part, Enum.NormalId.Top, hrp.Position, "increase")
+                                            end
+                                        end
+                                    end)
+                                    waitFn(0.06)
+                                end
+                                waitFn(0.5)
+                            end
+
+                            if #toPaint > 0 and paintEvent then
+                                for i, pd in ipairs(toPaint) do
+                                    if not rebuiltActive then break end
+                                    rebuiltLastRebuildAttempt[pd.key] = now
+                                    pcall(function()
+                                        local matStr = getMaterialStr(pd.saved.mat)
+                                        paintEvent:FireServer(pd.part, Enum.NormalId.Top, hrp.Position, "both 🤝", pd.saved.color, matStr, "")
+                                    end)
+                                    waitFn(0.06)
+                                end
+                                waitFn(0.5)
+                            end
+                            
+                            if #toBuild > 0 and paintEvent and pTool then
+                                waitFn(1.2)
+                                local postBuildGrid = snapshotMyWorkspace()
+                                local newlyBuiltToPaint = {}
+                                
+                                for _, data in ipairs(toBuild) do
+                                    local newCur = postBuildGrid[data.key]
+                                    if newCur and (newCur.color ~= data.saved.color or newCur.mat ~= data.saved.mat) then
+                                        table.insert(newlyBuiltToPaint, {part = newCur.part, saved = data.saved})
+                                    end
+                                end
+                                
+                                if #newlyBuiltToPaint > 0 then
+                                    isSpoofing = true
+                                    hum:EquipTool(pTool)
+                                    waitFn(0.05)
+                                    hum:UnequipTools()
+                                    waitFn(0.05)
+                                    if currentTool then hum:EquipTool(currentTool) end
+                                    isSpoofing = false
+                                    
+                                    for i, pd in ipairs(newlyBuiltToPaint) do
+                                        if not rebuiltActive then break end
+                                        pcall(function()
+                                            local matStr = getMaterialStr(pd.saved.mat)
+                                            paintEvent:FireServer(pd.part, Enum.NormalId.Top, hrp.Position, "both 🤝", pd.saved.color, matStr, "")
+                                        end)
+                                        waitFn(0.06)
+                                    end
+                                    waitFn(0.5)
+                                end
+                            end
+                        end
+
+                        for k, cur in pairs(currentGrid) do
+                            if not rebuiltGrid[k] then
+                                rebuiltGrid[k] = {pos = cur.pos, color = cur.color, mat = cur.mat, size = cur.size, shape = cur.shape}
+                            end
+                        end
+                    end
+                end
+            end)
+        else
+            toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 100)
+            toggleBtn.Text = "INACTIVE"
+            rebuiltGrid = {}
+            rebuiltLastRebuildAttempt = {}
+            sendAlert("Rebuilt deactivated. Memory cleared.", "#FF0000", Color3.fromRGB(255, 0, 0))
+        end
+    end)
+
+    t.Equipped:Connect(function()
+        pcall(function() gui.Parent = CoreGui:FindFirstChild("RobloxGui") or CoreGui end)
+        if not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+        mf.Visible = true
+    end)
+
+    t.Unequipped:Connect(function()
+        if isSpoofing then return end
+        gui.Parent = nil
+        mf.Visible = false
+    end)
+
+    t.Parent = LocalPlayer.Backpack
+end
+
+local function didWhitelistedPlayerDoIt(pos)
+    for userId, _ in pairs(whitelistedPlayers) do
+        local p = Players:GetPlayerByUserId(userId)
+        if p and p.Character then
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            local tool = p.Character:FindFirstChildOfClass("Tool")
+            if hrp then
+                local dist = (hrp.Position - pos).Magnitude
+                if dist < 100 and tool and (tool.Name == "Delete" or tool.Name == "Paint" or tool.Name == "Build") then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function getAntiGrief2Tool()
+    if LocalPlayer.Backpack:FindFirstChild("Anti-Grief 2") then LocalPlayer.Backpack["Anti-Grief 2"]:Destroy() end
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Anti-Grief 2") then LocalPlayer.Character["Anti-Grief 2"]:Destroy() end
+
+    local t = Instance.new("Tool")
+    t.Name = "Anti-Grief 2"
+    t.RequiresHandle = true
+    t.CanBeDropped = false
+
+    local h = Instance.new("Part")
+    h.Name = "Handle"
+    h.Size = Vector3.new(1.2, 1.8, 0.2)
+    h.Color = Color3.fromRGB(200, 230, 255)
+    h.Material = Enum.Material.Neon
+    h.CanCollide = false
+    h.Parent = t
+
+    local screen = Instance.new("Part")
+    screen.Name = "Screen"
+    screen.Size = Vector3.new(1.1, 1.7, 0.22)
+    screen.Color = Color3.fromRGB(255, 255, 255)
+    screen.Material = Enum.Material.SmoothPlastic
+    screen.CanCollide = false
+    screen.Massless = true
+    screen.Parent = t
+
+    local lw = Instance.new("WeldConstraint")
+    lw.Part0 = h
+    lw.Part1 = screen
+    lw.Parent = h
+    screen.CFrame = h.CFrame
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "AntiGrief2Gui"
+    gui.ResetOnSpawn = false
+
+    local toggleBtn = Instance.new("TextButton", gui)
+    toggleBtn.Size = UDim2.new(0, 100, 0, 30)
+    toggleBtn.Position = UDim2.new(0.5, -50, 1, -120)
+    toggleBtn.BackgroundColor3 = ag2Active and Color3.fromRGB(150, 255, 150) or Color3.fromRGB(255, 255, 255)
+    local tbc = Instance.new("UICorner", toggleBtn); tbc.CornerRadius = UDim.new(0, 15)
+    toggleBtn.Text = ag2Active and "AG2: ON" or "AG2: OFF"
+    toggleBtn.Font = Enum.Font.GothamBold
+    toggleBtn.TextSize = 14
+    toggleBtn.TextColor3 = Color3.fromRGB(50, 150, 255)
+    toggleBtn.Visible = false
+
+    local rightFrame = Instance.new("Frame", gui)
+    rightFrame.Size = UDim2.new(0, 200, 0, 300)
+    rightFrame.Position = UDim2.new(1, -220, 0.5, -150)
+    rightFrame.BackgroundColor3 = Color3.fromRGB(240, 248, 255)
+    rightFrame.BackgroundTransparency = 0.2
+    rightFrame.Visible = false
+    local rfc = Instance.new("UICorner", rightFrame); rfc.CornerRadius = UDim.new(0, 10)
+    
+    local title = Instance.new("TextLabel", rightFrame)
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.BackgroundTransparency = 1
+    title.Text = "Whitelist"
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 16
+    title.TextColor3 = Color3.fromRGB(50, 150, 255)
+
+    local sf = Instance.new("ScrollingFrame", rightFrame)
+    sf.Size = UDim2.new(1, -10, 1, -40)
+    sf.Position = UDim2.new(0, 5, 0, 35)
+    sf.BackgroundTransparency = 1
+    sf.ScrollBarThickness = 4
+    
+    local layout = Instance.new("UIListLayout", sf)
+    layout.Padding = UDim.new(0, 5)
+    layout.SortOrder = Enum.SortOrder.Name
+
+    local playerEvents = {}
+
+    local function refreshPlayerList()
+        for _, child in ipairs(sf:GetChildren()) do
+            if child:IsA("Frame") then child:Destroy() end
+        end
+        
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then
+                local pf = Instance.new("Frame", sf)
+                pf.Size = UDim2.new(1, -8, 0, 30)
+                pf.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+                pf.Name = p.Name
+                local pfc = Instance.new("UICorner", pf); pfc.CornerRadius = UDim.new(0, 5)
+                
+                local pName = Instance.new("TextLabel", pf)
+                pName.Size = UDim2.new(1, -60, 1, 0)
+                pName.Position = UDim2.new(0, 5, 0, 0)
+                pName.BackgroundTransparency = 1
+                pName.Text = p.Name
+                pName.Font = Enum.Font.GothamSemibold
+                pName.TextSize = 12
+                pName.TextXAlignment = Enum.TextXAlignment.Left
+                pName.TextColor3 = whitelistedPlayers[p.UserId] and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(100, 100, 100)
+                
+                local checkBtn = Instance.new("TextButton", pf)
+                checkBtn.Size = UDim2.new(0, 25, 0, 25)
+                checkBtn.Position = UDim2.new(1, -55, 0.5, -12.5)
+                checkBtn.BackgroundColor3 = Color3.fromRGB(100, 255, 100)
+                checkBtn.Text = "✓"
+                checkBtn.Font = Enum.Font.GothamBold
+                checkBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                local cbc = Instance.new("UICorner", checkBtn); cbc.CornerRadius = UDim.new(0, 4)
+                
+                local xBtn = Instance.new("TextButton", pf)
+                xBtn.Size = UDim2.new(0, 25, 0, 25)
+                xBtn.Position = UDim2.new(1, -28, 0.5, -12.5)
+                xBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+                xBtn.Text = "✗"
+                xBtn.Font = Enum.Font.GothamBold
+                xBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                local xbc = Instance.new("UICorner", xBtn); xbc.CornerRadius = UDim.new(0, 4)
+                
+                checkBtn.MouseButton1Click:Connect(function()
+                    whitelistedPlayers[p.UserId] = true
+                    pName.TextColor3 = Color3.fromRGB(0, 200, 0)
+                end)
+                
+                xBtn.MouseButton1Click:Connect(function()
+                    whitelistedPlayers[p.UserId] = nil
+                    pName.TextColor3 = Color3.fromRGB(100, 100, 100)
+                end)
+            end
+        end
+        sf.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+    end
+    
+    table.insert(playerEvents, Players.PlayerAdded:Connect(function()
+        refreshPlayerList()
+    end))
+    table.insert(playerEvents, Players.PlayerRemoving:Connect(function()
+        refreshPlayerList()
+    end))
+    refreshPlayerList()
+
+    local isSpoofing = false
+
+    local function isValidBrick(p)
+        if not p:IsA("BasePart") then return false end
+        if string.find(string.lower(p.Name), "sign") then return false end
+        if p:FindFirstChildOfClass("SurfaceGui") then return false end
+        return true
+    end
+
+    local function snapshotWorkspace()
+        local grid = {}
+        local bricks = workspace:FindFirstChild("Bricks")
+        if bricks then
+            for _, p in ipairs(bricks:GetDescendants()) do
+                if isValidBrick(p) then
+                    grid[getPosKey(p.Position)] = { part = p, pos = p.Position, color = p.Color, mat = p.Material, size = p.Size, shape = p:IsA("Part") and p.Shape or nil }
+                end
+            end
+        end
+        return grid
+    end
+
+    toggleBtn.MouseButton1Click:Connect(function()
+        ag2Active = not ag2Active
+        if ag2Active then
+            toggleBtn.BackgroundColor3 = Color3.fromRGB(150, 255, 150)
+            toggleBtn.Text = "AG2: ON"
+            ag2ProtectedGrid = {}
+            ag2LastRebuildAttempt = {}
+
+            local initGrid = snapshotWorkspace()
+            local count = 0
+            for k, v in pairs(initGrid) do
+                ag2ProtectedGrid[k] = { pos = v.pos, color = v.color, mat = v.mat, size = v.size, shape = v.shape }
+                count = count + 1
+            end
+
+            sendAlert("Anti-Grief 2 active! Cloud theme running. Stored: " .. tostring(count) .. " blocks.", "#00FFFF", Color3.fromRGB(0, 255, 255))
+
+            spawnFn(function()
+                while ag2Active do
+                    waitFn(1)
+                    local currentGrid = snapshotWorkspace()
+                    local char = LocalPlayer.Character
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+                    if hum and hrp then
+                        local buildEvent = getEvent("Build")
+                        local paintEvent = getEvent("Paint")
+                        local shapeEvent = getEvent("Shape")
+
+                        local toBuild = {}
+                        local toPaint = {}
+                        local toShape = {}
+
+                        local now = tick()
+                        for k, saved in pairs(ag2ProtectedGrid) do
+                            local cur = currentGrid[k]
+                            if not cur then
+                                if didWhitelistedPlayerDoIt(saved.pos) then
+                                    ag2ProtectedGrid[k] = nil
+                                else
+                                    if not ag2LastRebuildAttempt[k] or (now - ag2LastRebuildAttempt[k] > 5) then
+                                        table.insert(toBuild, {key = k, saved = saved})
+                                    end
+                                end
+                            else
+                                local needsPaint = false
+                                if cur.color ~= saved.color or cur.mat ~= saved.mat then
+                                    needsPaint = true
+                                end
+                                
+                                local curShape = cur.part:IsA("Part") and cur.part.Shape or nil
+                                local needsShape = false
+                                if cur.size ~= saved.size or curShape ~= saved.shape then
+                                    needsShape = true
+                                end
+                                
+                                if needsPaint or needsShape then
+                                    if didWhitelistedPlayerDoIt(saved.pos) then
+                                        ag2ProtectedGrid[k].color = cur.color
+                                        ag2ProtectedGrid[k].mat = cur.mat
+                                        ag2ProtectedGrid[k].size = cur.size
+                                        ag2ProtectedGrid[k].shape = curShape
+                                    else
+                                        if needsPaint and (not ag2LastRebuildAttempt[k] or (now - ag2LastRebuildAttempt[k] > 5)) then
+                                            table.insert(toPaint, {key = k, part = cur.part, saved = saved})
+                                        end
+                                        if needsShape and (not ag2LastRebuildAttempt[k] or (now - ag2LastRebuildAttempt[k] > 2)) then
+                                            table.insert(toShape, {key = k, part = cur.part, saved = saved})
+                                        end
+                                    end
+                                end
+                            end
+                        end
+
+                        if (#toBuild > 0 or #toPaint > 0 or #toShape > 0) and (buildEvent or paintEvent or shapeEvent) then
+                            local currentTool = char:FindFirstChildOfClass("Tool")
+                            local bTool = LocalPlayer.Backpack:FindFirstChild("Build") or char:FindFirstChild("Build")
+                            local pTool = LocalPlayer.Backpack:FindFirstChild("Paint") or char:FindFirstChild("Paint")
+                            local sTool = LocalPlayer.Backpack:FindFirstChild("Shape") or char:FindFirstChild("Shape")
+
+                            if bTool or pTool or sTool then
+                                isSpoofing = true
+                                if #toBuild > 0 and bTool then hum:EquipTool(bTool)
+                                elseif #toShape > 0 and sTool then hum:EquipTool(sTool)
+                                elseif #toPaint > 0 and pTool then hum:EquipTool(pTool) end
+                                waitFn(0.05)
+                                hum:UnequipTools()
+                                waitFn(0.05)
+                                if currentTool then hum:EquipTool(currentTool) end
+                                isSpoofing = false
+                            end
+
+                            if #toBuild > 0 and buildEvent then
+                                sendAlert("AG2 detected " .. tostring(#toBuild) .. " missing blocks. Restoring...", "#FFA500", Color3.fromRGB(255, 165, 0))
+                                for i, data in ipairs(toBuild) do
+                                    if not ag2Active then break end
+                                    ag2LastRebuildAttempt[data.key] = now
+                                    pcall(function()
+                                        local tBlock, tNorm, tHit, spoofFallback = getInfiniteBuildArgs(data.saved.pos, hrp)
+                                        buildEvent:FireServer(tBlock, tNorm, tHit, "normal", spoofFallback)
+                                    end)
+                                    waitFn(0.06)
+                                end
+                                waitFn(0.5)
+                            end
+
+                            if #toShape > 0 and shapeEvent then
+                                for i, sd in ipairs(toShape) do
+                                    if not ag2Active then break end
+                                    ag2LastRebuildAttempt[sd.key] = now
+                                    pcall(function()
+                                        local diff = sd.saved.size - sd.part.Size
+                                        if math.abs(diff.X) > 0.05 then
+                                            shapeEvent:FireServer(sd.part, Enum.NormalId.Right, hrp.Position, diff.X > 0 and "increase" or "decrease")
+                                        elseif math.abs(diff.Y) > 0.05 then
+                                            shapeEvent:FireServer(sd.part, Enum.NormalId.Top, hrp.Position, diff.Y > 0 and "increase" or "decrease")
+                                        elseif math.abs(diff.Z) > 0.05 then
+                                            shapeEvent:FireServer(sd.part, Enum.NormalId.Front, hrp.Position, diff.Z > 0 and "increase" or "decrease")
+                                        else
+                                            local curShape = sd.part:IsA("Part") and sd.part.Shape or nil
+                                            if curShape ~= sd.saved.shape then
+                                                shapeEvent:FireServer(sd.part, Enum.NormalId.Top, hrp.Position, "increase")
+                                            end
+                                        end
+                                    end)
+                                    waitFn(0.06)
+                                end
+                                waitFn(0.5)
+                            end
+
+                            if #toPaint > 0 and paintEvent then
+                                for i, pd in ipairs(toPaint) do
+                                    if not ag2Active then break end
+                                    ag2LastRebuildAttempt[pd.key] = now
+                                    pcall(function()
+                                        local matStr = getMaterialStr(pd.saved.mat)
+                                        paintEvent:FireServer(pd.part, Enum.NormalId.Top, hrp.Position, "both 🤝", pd.saved.color, matStr, "")
+                                    end)
+                                    waitFn(0.06)
+                                end
+                                waitFn(0.5)
+                            end
+                        end
+                    end
+                    
+                    for k, cur in pairs(currentGrid) do
+                        if not ag2ProtectedGrid[k] then
+                            ag2ProtectedGrid[k] = {pos = cur.pos, color = cur.color, mat = cur.mat, size = cur.size, shape = cur.shape}
+                        end
+                    end
+                end
+            end)
+        else
+            toggleBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            toggleBtn.Text = "AG2: OFF"
+            ag2ProtectedGrid = {}
+            ag2LastRebuildAttempt = {}
+            sendAlert("Anti-Grief 2 deactivated.", "#FF0000", Color3.fromRGB(255, 0, 0))
+        end
+    end)
+
+    t.Equipped:Connect(function()
+        pcall(function() gui.Parent = CoreGui:FindFirstChild("RobloxGui") or CoreGui end)
+        if not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+        toggleBtn.Visible = true
+        rightFrame.Visible = true
+    end)
+
+    t.Unequipped:Connect(function()
+        if isSpoofing then return end
+        gui.Parent = nil
+        toggleBtn.Visible = false
+        rightFrame.Visible = false
+    end)
+    
+    t.Destroying:Connect(function()
+        for _, conn in ipairs(playerEvents) do
+            conn:Disconnect()
+        end
+    end)
+
+    t.Parent = LocalPlayer.Backpack
+end
+
 LocalPlayer.Chatted:Connect(function(msg)
 if msg:lower() == "/antigriefd" then
 spawnFn(getAntiGriefBuildTool)
+elseif msg:lower() == "/antigrief2" then
+spawnFn(getAntiGrief2Tool)
+elseif msg:lower() == "/rebuilt" then
+spawnFn(getRebuiltTool)
 elseif msg:lower() == "/worldedit" then
 spawnFn(getWorldEditTool)
 elseif msg:lower() == "/wallbuilder" then
@@ -1273,10 +1934,10 @@ toggleInfBtools(true)
 elseif msg:lower() == "/unfbtools" then
 toggleInfBtools(false)
 elseif msg:lower() == "/cmds" then
-sendAlert("Build Tools Loaded! Commands: /antigriefd, /worldedit, /wallbuilder, /destroyer, /infbtools, /unfbtools, /cmds", "#00FF00", Color3.fromRGB(0, 255, 0))
+sendAlert("Build Tools Loaded! Commands: /antigriefd, /antigrief2, /rebuilt, /worldedit, /wallbuilder, /destroyer, /infbtools, /unfbtools, /cmds", "#00FF00", Color3.fromRGB(0, 255, 0))
 sendAlert("created by:sofiakira", "#FF69B4", Color3.fromRGB(255, 105, 180))
 end
 end)
 
-sendAlert("Build Tools Loaded! Commands: /antigriefd, /worldedit, /wallbuilder, /destroyer, /infbtools, /unfbtools, /cmds", "#00FF00", Color3.fromRGB(0, 255, 0))
+sendAlert("Build Tools Loaded! Commands: /antigriefd, /antigrief2, /rebuilt, /worldedit, /wallbuilder, /destroyer, /infbtools, /unfbtools, /cmds", "#00FF00", Color3.fromRGB(0, 255, 0))
 sendAlert("created by:sofiakira", "#FF69B4", Color3.fromRGB(255, 105, 180))
